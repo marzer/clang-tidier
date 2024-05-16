@@ -15,6 +15,7 @@ import misk
 import json
 import os
 import concurrent.futures as futures
+from typing import Tuple
 from io import StringIO
 from pathlib import Path
 
@@ -28,6 +29,7 @@ IS_WORKER = False
 STOP = None
 FATAL_ERROR = None
 PROBLEMATIC_FILE_COUNT = None
+ANSI_ESCAPE_CODES = re.compile(r'(?:\x1B[@-_]|[\x80-\x9F])[0-?]*[ -/]*[@-~]')
 
 
 def error(text):
@@ -48,9 +50,15 @@ def initialize_worker():
     signal.signal(signal.SIGINT, sigint_handler)
 
 
-def clean_clang_tidy_output(s):
+def clean_clang_tidy_output(s: str):
     if s is None:
         return ''
+
+    # fix windows nonsense
+    s = str(s).replace("\r\n", "\n")
+
+    # strip away ansi nonsense
+    s = ANSI_ESCAPE_CODES.sub('', s)
 
     # strip "XXXXXX warnings/errors generated."
     s = re.sub(r'[0-9]+ (?:warning|error)s? (?:and [0-9]+ (?:warning|error)s? )?generated[.]?', r'', s)
@@ -88,7 +96,9 @@ def get_relative_path(p: Path, relative_to: Path = Path.cwd()) -> Path:
         return p
 
 
-def worker(clang_tidy, compile_db: Path, werror: bool, src_file: Path):
+def worker(
+    clang_tidy_exe: str, clang_tidy_version: Tuple[int, int, int], compile_db: Path, werror: bool, src_file: Path
+):
     global STOP
     global FATAL_ERROR
     global PROBLEMATIC_FILE_COUNT
@@ -101,14 +111,14 @@ def worker(clang_tidy, compile_db: Path, werror: bool, src_file: Path):
 
         proc = subprocess.run(
             [
-                clang_tidy,
+                clang_tidy_exe,
                 rf'-p={compile_db}',
                 '--quiet',
                 '--warnings-as-errors=-*',  # none
-                '--use-color=false',
                 '--extra-arg=-D__clang_tidy__',
-                src_file,
-            ],
+            ]
+            + (['--use-color=false'] if clang_tidy_version[0] >= 12 else [])
+            + [src_file],
             cwd=str(Path.cwd()),
             encoding='utf-8',
             capture_output=True,
@@ -281,15 +291,42 @@ def main_impl():
         return 0
 
     # detect clang-tidy
-    clang_tidy = 'clang-tidy'
+    clang_tidy_exe = 'clang-tidy'
+    clang_tidy_label = clang_tidy_exe
+    clang_tidy_version = (0, 0, 0)
     if not shutil.which('clang-tidy'):
-        clang_tidy = None
+        clang_tidy_exe = None
         for i in range(20, 6, -1):
             if shutil.which(rf'clang-tidy-{i}'):
-                clang_tidy = rf'clang-tidy-{i}'
+                clang_tidy_exe = rf'clang-tidy-{i}'
+                clang_tidy_label = clang_tidy_exe
+                clang_tidy_version = (i, 0, 0)
                 break
-    if clang_tidy is None:
+    if clang_tidy_exe is None:
         return rf"could not detect {bright('clang-tidy')}"
+
+    # query the actual version
+    try:
+        clang_tidy_version_output = clean_clang_tidy_output(
+            subprocess.run(
+                [clang_tidy_exe, '--version'], cwd=str(Path.cwd()), encoding='utf-8', capture_output=True
+            ).stdout
+        )
+        clang_tidy_version_output = re.search(
+            r'\b[vV]?([0-9]+?)[.]([0-9]+?)(?:[.]([0-9]+?))?\b', clang_tidy_version_output
+        )
+        if clang_tidy_version_output is not None:
+            clang_tidy_version = (
+                int(clang_tidy_version_output[1]),
+                int(clang_tidy_version_output[2]),
+                int(clang_tidy_version_output[3]) if clang_tidy_version_output[3] is not None else 0,
+            )
+            print(
+                rf"detected {bright(rf'clang-tidy v{clang_tidy_version[0]}.{clang_tidy_version[1]}.{clang_tidy_version[2]}')}"
+            )
+            clang_tidy_label = rf'clang-tidy-{clang_tidy_version[0]}'
+    except:
+        pass  # a failure here doesn't really matter, it's just for finer-grained version checking
 
     # detect git + filter out gitignored files
     if find_upwards(".git", files=False, directories=True, start_dir=args.compile_db.parent) is not None:
@@ -325,11 +362,14 @@ def main_impl():
     STOP = multiprocessing.Event()
     FATAL_ERROR = multiprocessing.Event()
     PROBLEMATIC_FILE_COUNT = multiprocessing.Value('i', 0)
-    print(rf'running {bright(clang_tidy)} on {len(sources)} file{"s" if len(sources) > 1 else ""}')
+    print(rf'running {bright(clang_tidy_label)} on {len(sources)} file{"s" if len(sources) > 1 else ""}')
     with futures.ProcessPoolExecutor(
         max_workers=max(min(os.cpu_count(), len(sources), args.threads), 1), initializer=initialize_worker
     ) as executor:
-        jobs = [executor.submit(worker, clang_tidy, args.compile_db, args.werror, f) for f in sources]
+        jobs = [
+            executor.submit(worker, clang_tidy_exe, clang_tidy_version, args.compile_db, args.werror, f)
+            for f in sources
+        ]
         for future in futures.as_completed(jobs):
             if STOP.is_set():
                 future.cancel()
@@ -351,7 +391,7 @@ def main_impl():
         return r'An error occurred.'
     with PROBLEMATIC_FILE_COUNT.get_lock():
         if PROBLEMATIC_FILE_COUNT.value:
-            print(rf'{bright(clang_tidy)} found problems in {PROBLEMATIC_FILE_COUNT.value} file(s).')
+            print(rf'{bright(clang_tidy_label)} found problems in {PROBLEMATIC_FILE_COUNT.value} file(s).')
             return int(PROBLEMATIC_FILE_COUNT.value)
     return 0
 
