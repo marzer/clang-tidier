@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.2 - 2024/06/06
+
+-   Fixed build-generated translation causing 'did not exist or was not a file' errors
+-   Improved performance of TU enumeration step
+
 ## v0.1.1 - 2024/05/16
 
 -   Fixed issues with older clang-tidy versions trying to use `--use-color`

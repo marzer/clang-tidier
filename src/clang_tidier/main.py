@@ -240,6 +240,16 @@ def main_impl():
         if not args.compile_db.is_file():
             return rf"compilation database {bright(args.compile_db)} did not exist or was not a file"
 
+    # compute filters
+    if not args.include:
+        args.include = []
+    if not args.exclude:
+        args.exclude = []
+    args.exclude.append(r'.*/_deps/.*')
+    args.exclude.append(r'^/tmp/.*')
+    args.include = [re.compile(s) for s in args.include]
+    args.exclude = [re.compile(s) for s in args.exclude]
+
     # read compilation db
     sources = None
     with open(str(args.compile_db), encoding='utf-8') as f:
@@ -254,38 +264,44 @@ def main_impl():
     # enumerate translation units
     for i in range(len(sources)):
         source = sources[i]
+        sources[i] = None
         if not isinstance(source, dict):
             return rf"expected source [{i}] as JSON object; saw {type(source).__name__}"
         source: dict
+        # read file path
         file = source.get('file', None)
-        directory = source.get('directory', None)
-        if file is None or directory is None:
-            return rf"expected source [{i}] to have keys {bright('file')} and {bright('directory')}"
-        directory = Path(directory)
-        if not (directory.exists() and directory.is_dir()):
-            return rf"source [{i}] directory {bright(directory)} did not exist"
+        if file is None:
+            return rf"expected source [{i}] to have key {bright('file')}"
         file = Path(file)
         if not file.is_absolute():
-            file = directory / file
+            directory = source.get('directory', None)
+            if directory is not None:
+                directory = Path(directory)
+            if directory:
+                file = directory / file
+        # apply include filter
+        if args.include:
+            include = False
+            for filter in args.include:
+                if filter.search(str(file)):
+                    include = True
+                    break
+            if not include:
+                continue
+        # apply exclude filter
+        if args.exclude:
+            include = True
+            for filter in args.exclude:
+                if filter.search(str(file)):
+                    include = False
+                    break
+            if not include:
+                continue
+        # check if the file exists
         if not (file.exists() and file.is_file()):
-            return rf"source [{i}] {bright(file)} did not exist or was not a file"
+            continue
         sources[i] = file
-    sources = misk.remove_duplicates(sorted(sources))
-    if not sources:
-        print("no work to do.")
-        return 0
-
-    # apply filters
-    if not args.include:
-        args.include = []
-    if not args.exclude:
-        args.exclude = []
-    args.exclude.append(r'.*/_deps/.*')
-    args.exclude.append(r'^/tmp/.*')
-    for filter in args.include:
-        sources = [s for s in sources if re.search(filter, str(s))]
-    for filter in args.exclude:
-        sources = [s for s in sources if not re.search(filter, str(s))]
+    sources = misk.remove_duplicates(sorted([s for s in sources if s is not None]))
     if not sources:
         print("no work to do.")
         return 0
