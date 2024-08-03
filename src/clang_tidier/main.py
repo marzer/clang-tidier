@@ -28,6 +28,7 @@ from .version import *
 IS_WORKER = False
 STOP = None
 FATAL_ERROR = None
+SESSION_FILE_LOCK = None
 PROBLEMATIC_FILE_COUNT = None
 ANSI_ESCAPE_CODES = re.compile(r'(?:\x1B[@-_]|[\x80-\x9F])[0-?]*[ -/]*[@-~]')
 
@@ -37,7 +38,8 @@ def error(text):
 
 
 def sigint_handler(signal, frame):
-    STOP.set()
+    if STOP is not None:
+        STOP.set()
     if not IS_WORKER:  # main thread
         print('\nKeyboardInterrupt caught; aborting...', flush=True)
     else:
@@ -96,12 +98,40 @@ def get_relative_path(p: Path, relative_to: Path = Path.cwd()) -> Path:
         return p
 
 
+def record_file_completed(session_file: Path, source_file: Path):
+    global SESSION_FILE_LOCK
+    SESSION_FILE_LOCK.acquire()
+    try:
+        source_file = str(source_file)
+        session_file.touch()
+        with open(str(session_file), encoding='utf-8', mode='r+') as f:
+            session = json.load(f)
+            session: dict
+            assert isinstance(session, dict)
+            if 'sources' not in session:
+                session['sources'] = dict()
+            if source_file not in session['sources']:
+                session['sources'][source_file] = dict()
+            session['sources'][source_file]['completed'] = True
+            f.seek(0)
+            json.dump(session, f, indent="\t")
+            f.truncate()
+    finally:
+        SESSION_FILE_LOCK.release()
+
+
 def worker(
-    clang_tidy_exe: str, clang_tidy_version: Tuple[int, int, int], compile_db: Path, werror: bool, src_file: Path
+    clang_tidy_exe: str,
+    clang_tidy_version: Tuple[int, int, int],
+    compile_db: Path,
+    werror: bool,
+    src_file: Path,
+    session_file: Path,
 ):
     global STOP
     global FATAL_ERROR
     global PROBLEMATIC_FILE_COUNT
+    global SESSION_FILE_LOCK
     if STOP.is_set():
         return
 
@@ -170,6 +200,8 @@ def worker(
                 msg = msg[1:]
             print(msg, flush=True)
         else:
+            if session_file:
+                record_file_completed(session_file, src_file)
             print(f'No problems found in {bright(get_relative_path(src_file))}.', flush=True)
 
     except Exception as exc:
@@ -204,6 +236,11 @@ def main_impl():
     args.add_argument(
         r"--threads", type=int, metavar=r"<num>", default=os.cpu_count(), help=rf"number of threads to use."
     )
+    args.add_argument(
+        r'--resumable',
+        action=r'store_true',
+        help=r"saves run information so subsequent re-runs may avoid re-scanning files.",
+    )
     args = args.parse_args()
 
     if args.print_version:
@@ -215,6 +252,8 @@ def main_impl():
         return
 
     print(rf'{bright("clang-tidier", colour="cyan")} v{VERSION_STRING} - github.com/marzer/clang-tidier')
+    global STOP
+    STOP = multiprocessing.Event()
 
     # find compile_commands.json
     if args.compile_db is None:
@@ -252,14 +291,19 @@ def main_impl():
 
     # read compilation db
     sources = None
+    compile_db_hash = ''
     with open(str(args.compile_db), encoding='utf-8') as f:
-        sources = json.load(f)
+        db_text = f.read()
+        sources = json.loads(db_text)
+        compile_db_hash = misk.sha1(db_text)
     if not isinstance(sources, (list, tuple)):
         return rf"expected array at root of {bright('clang-tidy')}; saw {type(sources).__name__}"
     if not sources:
         print("no work to do.")
         return 0
-    sources = list(sources)
+    sources = misk.remove_duplicates(sources)
+    if STOP.is_set():
+        return 0
 
     # enumerate translation units
     for i in range(len(sources)):
@@ -279,11 +323,21 @@ def main_impl():
                 directory = Path(directory)
             if directory:
                 file = directory / file
+        # check if the file exists
+        if not (file.exists() and file.is_file()):
+            continue
+        sources[i] = file
+    sources = misk.remove_duplicates(sorted([s for s in sources if s is not None]))
+
+    # apply include and exclude filters
+    for i in range(len(sources)):
+        source = sources[i]
+        sources[i] = None
         # apply include filter
         if args.include:
             include = False
             for filter in args.include:
-                if filter.search(str(file)):
+                if filter.search(str(source)):
                     include = True
                     break
             if not include:
@@ -292,18 +346,17 @@ def main_impl():
         if args.exclude:
             include = True
             for filter in args.exclude:
-                if filter.search(str(file)):
+                if filter.search(str(source)):
                     include = False
                     break
             if not include:
                 continue
-        # check if the file exists
-        if not (file.exists() and file.is_file()):
-            continue
-        sources[i] = file
-    sources = misk.remove_duplicates(sorted([s for s in sources if s is not None]))
+        sources[i] = source
+    sources = [s for s in sources if s is not None]
     if not sources:
         print("no work to do.")
+        return 0
+    if STOP.is_set():
         return 0
 
     # detect clang-tidy
@@ -343,6 +396,8 @@ def main_impl():
             clang_tidy_label = rf'clang-tidy-{clang_tidy_version[0]}'
     except:
         pass  # a failure here doesn't really matter, it's just for finer-grained version checking
+    if STOP.is_set():
+        return 0
 
     # detect git + filter out gitignored files
     if find_upwards(".git", files=False, directories=True, start_dir=args.compile_db.parent) is not None:
@@ -360,7 +415,6 @@ def main_impl():
                     == 0
                 ):
                     gitignored_sources.add(source)
-
             sources = [s for s in sources if s not in gitignored_sources]
             if not sources:
                 print("no work to do.")
@@ -370,20 +424,106 @@ def main_impl():
             print(
                 rf"{bright(rf'warning:', 'yellow')} detected a git repository but could not detect {bright('git')}; .gitignore rules will not be respected"
             )
+    if STOP.is_set():
+        return 0
+
+    # session
+    session_file = None
+    session = None
+    if args.resumable:
+        session_id = misk.sha1(str(args.compile_db.resolve()))
+        # session_dir = paths.TEMP
+        session_dir = Path.cwd()
+        session_dir.mkdir(exist_ok=True)
+        session_file = session_dir / rf'session_{session_id}.json'
+        write_session = False
+        if session_file.exists():
+            try:
+                with open(session_file, encoding='utf-8') as f:
+                    session = json.load(f)
+            except:
+                print(rf"{bright(rf'warning:', 'yellow')} session could not be resumed: could not read session file")
+                try:
+                    session_file.unlink()
+                except:
+                    pass
+        if session is None:
+            session = dict()
+            write_session = True
+
+        def reset_sources():
+            nonlocal session
+            nonlocal session_id
+            session['sources'] = dict()
+            write_session = True
+
+        if 'id' not in session or session['id'] != session_id:
+            session['id'] = session_id
+            reset_sources()
+        if 'hash' not in session or session['hash'] != compile_db_hash:
+            session['hash'] = compile_db_hash
+            reset_sources()
+        if 'compile_db' not in session or session['compile_db'] != str(args.compile_db.resolve()):
+            session['compile_db'] = str(args.compile_db.resolve())
+            reset_sources()
+        if 'clang_tidy_version' not in session or tuple(session['clang_tidy_version']) != clang_tidy_version:
+            session['clang_tidy_version'] = clang_tidy_version
+            reset_sources()
+        if 'sources' not in session:
+            reset_sources()
+        completed_sources = set()
+        all_completed = True
+        for source in sources:
+            source: Path
+            source_key = str(source.resolve())
+            if source_key not in session['sources']:
+                session['sources'][source_key] = dict()
+                write_session = True
+            source_obj = session['sources'][source_key]
+            source_modified = source.stat().st_mtime_ns
+            if 'modified' not in source_obj or source_obj['modified'] != source_modified:
+                source_obj['modified'] = source_modified
+                source_obj['completed'] = False
+                write_session = True
+            if 'completed' not in source_obj:
+                source_obj['completed'] = False
+                write_session = True
+            if source_obj['completed']:
+                completed_sources.add(source)
+            else:
+                all_completed = False
+        if all_completed:
+            for _, v in session['sources'].items():
+                v['completed'] = False
+            completed_sources.clear()
+            write_session = True
+        if write_session:
+            print(rf"{'re' if all_completed else ''}starting session {bright(session_id)}")
+            with open(session_file, encoding='utf-8', mode='w') as f:
+                json.dump(session, f, indent="\t")
+        else:
+            print(rf"resuming session {bright(session_id)}")
+
+        sources = [s for s in sources if s not in completed_sources]
+        if not sources:
+            print("no work to do.")
+            return 0
+        if STOP.is_set():
+            return 0
 
     # run clang-tidy on each file
-    global STOP
     global FATAL_ERROR
     global PROBLEMATIC_FILE_COUNT
-    STOP = multiprocessing.Event()
+    global SESSION_FILE_LOCK
     FATAL_ERROR = multiprocessing.Event()
     PROBLEMATIC_FILE_COUNT = multiprocessing.Value('i', 0)
+    SESSION_FILE_LOCK = multiprocessing.Lock()
     print(rf'running {bright(clang_tidy_label)} on {len(sources)} file{"s" if len(sources) > 1 else ""}')
     with futures.ProcessPoolExecutor(
         max_workers=max(min(os.cpu_count(), len(sources), args.threads), 1), initializer=initialize_worker
     ) as executor:
         jobs = [
-            executor.submit(worker, clang_tidy_exe, clang_tidy_version, args.compile_db, args.werror, f)
+            executor.submit(worker, clang_tidy_exe, clang_tidy_version, args.compile_db, args.werror, f, session_file)
             for f in sources
         ]
         for future in futures.as_completed(jobs):

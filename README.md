@@ -15,7 +15,8 @@ pip3 install clang-tidier
 `clang-tidier` is a command-line application
 
 ```
-usage: clang-tidier [-h] [--version] [--include <regex> [<regex> ...]] [--exclude <regex> [<regex> ...]] [--werror] [--threads <num>] [compile_db]
+usage: clang-tidier [-h] [--version] [--include <regex> [<regex> ...]] [--exclude <regex> [<regex> ...]]
+                    [--werror] [--threads <num>] [--resumable] [compile_db]
 
 clang-tidy runner for C and C++ projects.
 
@@ -31,8 +32,9 @@ options:
                         regular expression to exclude source files.
   --werror              stop on the first file that emits warnings
   --threads <num>       number of threads to use.
+  --resumable           saves run information so subsequent re-runs may avoid re-scanning files.
 
-v0.1.0 - github.com/marzer/clang-tidier
+v0.2.0 - github.com/marzer/clang-tidier
 ```
 
 ## Exit codes

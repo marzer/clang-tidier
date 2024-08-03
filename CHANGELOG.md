@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.0 - 2024/08/04
+
+-   Added `--resumable`
+
 ## v0.1.2 - 2024/06/06
 
 -   Fixed build-generated translation causing 'did not exist or was not a file' errors
