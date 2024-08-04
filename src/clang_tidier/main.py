@@ -212,6 +212,21 @@ def worker(
             raise
 
 
+def make_boolean_optional_arg(args, name, default, help='', **kwargs):
+    if sys.version_info.minor >= 9:
+        args.add_argument(rf'--{name}', default=default, help=help, action=argparse.BooleanOptionalAction, **kwargs)
+    else:
+        args.add_argument(rf'--{name}', action=r'store_true', help=help, **kwargs)
+        args.add_argument(
+            rf'--no-{name}',
+            action=r'store_false',
+            help=(help if help == argparse.SUPPRESS else None),
+            dest=name,
+            **kwargs,
+        )
+        args.set_defaults(**{name: default})
+
+
 def main_impl():
     args = argparse.ArgumentParser(
         description=r'clang-tidy runner for C and C++ projects.',
@@ -236,11 +251,10 @@ def main_impl():
     args.add_argument(
         r"--threads", type=int, metavar=r"<num>", default=os.cpu_count(), help=rf"number of threads to use."
     )
-    args.add_argument(
-        r'--resumable',
-        action=r'store_true',
-        help=r"saves run information so subsequent re-runs may avoid re-scanning files.",
+    make_boolean_optional_arg(
+        args, r'session', default=True, help=r'saves run information so subsequent re-runs may avoid re-scanning files.'
     )
+    args.add_argument(r'--resumable', action=r'store_true', help=argparse.SUPPRESS)  # legacy
     args = args.parse_args()
 
     if args.print_version:
@@ -428,14 +442,13 @@ def main_impl():
         return 0
 
     # session
-    session_file = None
+    session_id = misk.sha1(str(args.compile_db.resolve()))
+    session_file = paths.TEMP / rf'session_{session_id}.json'
     session = None
     if args.resumable:
-        session_id = misk.sha1(str(args.compile_db.resolve()))
-        # session_dir = paths.TEMP
-        session_dir = Path.cwd()
-        session_dir.mkdir(exist_ok=True)
-        session_file = session_dir / rf'session_{session_id}.json'
+        args.session = True
+    if args.session:
+        session_file.parent.mkdir(exist_ok=True)
         write_session = False
         if session_file.exists():
             try:
@@ -457,11 +470,15 @@ def main_impl():
             session['sources'] = dict()
             write_session = True
 
+        compile_db_modified = args.compile_db.stat().st_mtime_ns
         if 'id' not in session or session['id'] != session_id:
             session['id'] = session_id
             reset_sources()
         if 'hash' not in session or session['hash'] != compile_db_hash:
             session['hash'] = compile_db_hash
+            reset_sources()
+        if 'modified' not in session or session['modified'] != compile_db_modified:
+            session['modified'] = compile_db_modified
             reset_sources()
         if 'compile_db' not in session or session['compile_db'] != str(args.compile_db.resolve()):
             session['compile_db'] = str(args.compile_db.resolve())
@@ -472,6 +489,7 @@ def main_impl():
         if 'sources' not in session:
             reset_sources()
         completed_sources = set()
+        any_completed = False
         all_completed = True
         for source in sources:
             source: Path
@@ -490,6 +508,7 @@ def main_impl():
                 write_session = True
             if source_obj['completed']:
                 completed_sources.add(source)
+                any_completed = True
             else:
                 all_completed = False
         if all_completed:
@@ -498,11 +517,11 @@ def main_impl():
             completed_sources.clear()
             write_session = True
         if write_session:
-            print(rf"{'re' if all_completed else ''}starting session {bright(session_id)}")
             with open(session_file, encoding='utf-8', mode='w') as f:
                 json.dump(session, f, indent="\t")
-        else:
-            print(rf"resuming session {bright(session_id)}")
+        print(
+            rf"{'restarting' if all_completed else ('resuming' if any_completed else 'starting')} session {bright(session_id)}"
+        )
 
         sources = [s for s in sources if s not in completed_sources]
         if not sources:
@@ -510,6 +529,11 @@ def main_impl():
             return 0
         if STOP.is_set():
             return 0
+    else:
+        try:
+            session_file.unlink()
+        except:
+            pass
 
     # run clang-tidy on each file
     global FATAL_ERROR
@@ -523,7 +547,15 @@ def main_impl():
         max_workers=max(min(os.cpu_count(), len(sources), args.threads), 1), initializer=initialize_worker
     ) as executor:
         jobs = [
-            executor.submit(worker, clang_tidy_exe, clang_tidy_version, args.compile_db, args.werror, f, session_file)
+            executor.submit(
+                worker,
+                clang_tidy_exe,
+                clang_tidy_version,
+                args.compile_db,
+                args.werror,
+                f,
+                session_file if session is not None else None,
+            )
             for f in sources
         ]
         for future in futures.as_completed(jobs):

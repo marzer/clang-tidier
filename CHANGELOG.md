@@ -1,8 +1,13 @@
 # Changelog
 
-## v0.2.0 - 2024/08/04
+## v0.3.0 - 2024/08/04
 
--   Added `--resumable`
+-   Added `--no-session`
+-   Added use of sessions by default
+
+## v0.2.0 - 2024/08/03
+
+-   Added `--session`
 
 ## v0.1.2 - 2024/06/06
 
