@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.0 - 2024/09/07
+
+-   Fixed sessions not restarting if `.clang-tidy` is modified
+-   Added `--labels-only`
+-   Minor performance improvements
+
 ## v0.3.0 - 2024/08/04
 
 -   Added `--no-session`

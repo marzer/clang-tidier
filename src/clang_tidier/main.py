@@ -127,6 +127,7 @@ def worker(
     werror: bool,
     src_file: Path,
     session_file: Path,
+    labels_only: bool,
 ):
     global STOP
     global FATAL_ERROR
@@ -142,7 +143,7 @@ def worker(
         proc = subprocess.run(
             [
                 clang_tidy_exe,
-                rf'-p={compile_db}',
+                rf'-p={compile_db.parent}',
                 '--quiet',
                 '--warnings-as-errors=-*',  # none
                 '--extra-arg=-D__clang_tidy__',
@@ -175,8 +176,6 @@ def worker(
         if proc.returncode != 0 or found_error:
             if werror:
                 STOP.set()
-            termw = shutil.get_terminal_size((80, 20))
-            termw = min(120, termw.columns)
             msg = ''
             if either_have_content:
                 for name, content, _ in (stdout, stderr):
@@ -185,15 +184,35 @@ def worker(
                     if both_have_content:
                         msg += f"\n  {name}:"
                     for line in content.splitlines():
-                        if line.strip():
-                            s = f"\n{indent}{line}"
-                            s = s.replace(
-                                "warning:",
-                                (bright('error:', colour='RED') if werror else bright('warning:', colour='YELLOW')),
-                            )
-                            s = re.sub(r'(\[[a-zA-Z0-9.-]+\])$', lambda m: bright(m[1]), s)
-                            msg += s
-                    msg = msg.replace(str(src_file), bright(get_relative_path(src_file)))
+                        if not line.strip():
+                            continue
+                        if labels_only and (re.match(r'^\s+', line) or re.match(r'^(.+?: )?note:', line)):
+                            continue
+                        s = f"\n{indent}{line}"
+                        msg += s
+
+                    if labels_only:
+                        msg = re.sub(
+                            r'^.+?: warning: .+? \[([a-zA-Z0-9.,-]+)\]$',
+                            lambda m: "\n".join([rf'[{x}]' for x in m[1].split(',')]),
+                            msg,
+                            flags=re.MULTILINE,
+                        )
+                        msg = re.sub(r'^\s+?.*?$', '', msg, flags=re.MULTILINE)
+                        msg = re.sub(r'\n\n+', '\n', msg)
+                        msg = [x.strip() for x in msg.split()]
+                        msg = "\n".join(sorted(misk.remove_duplicates([x for x in msg if x])))
+                    else:
+                        msg = re.sub(
+                            r'^(.+?): warning: (.+?) (\[[a-zA-Z0-9.,-]+\])$',
+                            lambda m: rf'{m[1]}: {"error" if werror else "warning"}: {m[2]} {bright(m[3])}',
+                            msg,
+                            flags=re.MULTILINE,
+                        )
+                        msg = msg.replace('error:', bright('error:', colour='RED'))
+                        msg = msg.replace('warning:', bright('warning:', colour='YELLOW'))
+                        msg = msg.replace('note:', bright('note:', colour='CYAN'))
+                        msg = msg.replace(str(src_file), bright(get_relative_path(src_file)))
             if proc.returncode != 0:
                 msg += f"\nclang-tidy subprocess exited with code {proc.returncode}."
             if msg.startswith('\n'):
@@ -202,7 +221,8 @@ def worker(
         else:
             if session_file:
                 record_file_completed(session_file, src_file)
-            print(f'No problems found in {bright(get_relative_path(src_file))}.', flush=True)
+            if not labels_only:
+                print(f'No problems found in {bright(get_relative_path(src_file))}.', flush=True)
 
     except Exception as exc:
         STOP.set()
@@ -234,7 +254,7 @@ def main_impl():
     )
     args.add_argument(r'--version', action=r'store_true', help=r"print the version and exit", dest=r'print_version')
     args.add_argument(
-        r"compile_db",
+        r"compile_db_path",
         type=Path,
         nargs=r'?',
         default=None,
@@ -254,7 +274,7 @@ def main_impl():
     make_boolean_optional_arg(
         args, r'session', default=True, help=r'saves run information so subsequent re-runs may avoid re-scanning files.'
     )
-    args.add_argument(r'--resumable', action=r'store_true', help=argparse.SUPPRESS)  # legacy
+    args.add_argument(r'--labels-only', action=r'store_true', help=argparse.SUPPRESS)
     args = args.parse_args()
 
     if args.print_version:
@@ -265,33 +285,35 @@ def main_impl():
         print(paths.PACKAGE)
         return
 
-    print(rf'{bright("clang-tidier", colour="cyan")} v{VERSION_STRING} - github.com/marzer/clang-tidier')
+    if not args.labels_only:
+        print(rf'{bright("clang-tidier", colour="cyan")} v{VERSION_STRING} - github.com/marzer/clang-tidier')
     global STOP
     STOP = multiprocessing.Event()
 
     # find compile_commands.json
-    if args.compile_db is None:
+    if args.compile_db_path is None:
         # look in cwd
         if (Path.cwd() / 'compile_commands.json').is_file():
-            args.compile_db = Path.cwd() / 'compile_commands.json'
+            args.compile_db_path = Path.cwd() / 'compile_commands.json'
         # search upwards
-        if args.compile_db is None:
-            args.compile_db = find_upwards('compile_commands.json')
+        if args.compile_db_path is None:
+            args.compile_db_path = find_upwards('compile_commands.json')
         # search one step downwards
-        if args.compile_db is None:
+        if args.compile_db_path is None:
             for dir in Path.cwd().iterdir():
                 if dir.is_dir() and (dir / 'compile_commands.json').is_file():
-                    args.compile_db = dir / 'compile_commands.json'
+                    args.compile_db_path = dir / 'compile_commands.json'
                     break
-        if args.compile_db is not None:
-            print(rf"found compilation database {bright(get_relative_path(args.compile_db))}")
+        if args.compile_db_path is not None:
+            if not args.labels_only:
+                print(rf"found compilation database {bright(get_relative_path(args.compile_db_path))}")
         else:
             return rf"could not find {bright('compile_commands.json')}"
     else:
-        if args.compile_db.exists() and args.compile_db.is_dir():
-            args.compile_db /= 'compile_commands.json'
-        if not args.compile_db.is_file():
-            return rf"compilation database {bright(args.compile_db)} did not exist or was not a file"
+        if args.compile_db_path.exists() and args.compile_db_path.is_dir():
+            args.compile_db_path /= 'compile_commands.json'
+        if not args.compile_db_path.is_file():
+            return rf"compilation database {bright(args.compile_db_path)} did not exist or was not a file"
 
     # compute filters
     if not args.include:
@@ -304,25 +326,25 @@ def main_impl():
     args.exclude = [re.compile(s) for s in args.exclude]
 
     # read compilation db
-    sources = None
+    compile_db = None
     compile_db_hash = ''
-    with open(str(args.compile_db), encoding='utf-8') as f:
+    with open(str(args.compile_db_path), encoding='utf-8') as f:
         db_text = f.read()
-        sources = json.loads(db_text)
+        compile_db = json.loads(db_text)
         compile_db_hash = misk.sha1(db_text)
-    if not isinstance(sources, (list, tuple)):
-        return rf"expected array at root of {bright('clang-tidy')}; saw {type(sources).__name__}"
-    if not sources:
+    if not isinstance(compile_db, (list, tuple)):
+        return rf"expected array at root of {bright('clang-tidy')}; saw {type(compile_db).__name__}"
+    if not compile_db:
         print("no work to do.")
         return 0
-    sources = misk.remove_duplicates(sources)
+    compile_db = misk.remove_duplicates(compile_db)
     if STOP.is_set():
         return 0
 
     # enumerate translation units
-    for i in range(len(sources)):
-        source = sources[i]
-        sources[i] = None
+    sources = []
+    for i in range(len(compile_db)):
+        source = compile_db[i]
         if not isinstance(source, dict):
             return rf"expected source [{i}] as JSON object; saw {type(source).__name__}"
         source: dict
@@ -337,10 +359,12 @@ def main_impl():
                 directory = Path(directory)
             if directory:
                 file = directory / file
+        file = file.resolve()
         # check if the file exists
         if not (file.exists() and file.is_file()):
             continue
-        sources[i] = file
+        sources.append(file)
+        source['file'] = str(file)
     sources = misk.remove_duplicates(sorted([s for s in sources if s is not None]))
 
     # apply include and exclude filters
@@ -387,6 +411,8 @@ def main_impl():
                 break
     if clang_tidy_exe is None:
         return rf"could not detect {bright('clang-tidy')}"
+    if STOP.is_set():
+        return 0
 
     # query the actual version
     try:
@@ -404,9 +430,10 @@ def main_impl():
                 int(clang_tidy_version_output[2]),
                 int(clang_tidy_version_output[3]) if clang_tidy_version_output[3] is not None else 0,
             )
-            print(
-                rf"detected {bright(rf'clang-tidy v{clang_tidy_version[0]}.{clang_tidy_version[1]}.{clang_tidy_version[2]}')}"
-            )
+            if not args.labels_only:
+                print(
+                    rf"detected {bright(rf'clang-tidy v{clang_tidy_version[0]}.{clang_tidy_version[1]}.{clang_tidy_version[2]}')}"
+                )
             clang_tidy_label = rf'clang-tidy-{clang_tidy_version[0]}'
     except:
         pass  # a failure here doesn't really matter, it's just for finer-grained version checking
@@ -414,26 +441,46 @@ def main_impl():
         return 0
 
     # detect git + filter out gitignored files
-    if find_upwards(".git", files=False, directories=True, start_dir=args.compile_db.parent) is not None:
+    if find_upwards(".git", files=False, directories=True, start_dir=args.compile_db_path.parent) is not None:
         if shutil.which('git') is not None:
-            gitignored_sources = set()
+            ignored_sources = set()
+            ignored_dirs = set()
+            ok_dirs = set()
             for source in sources:
-                if (
+                # check if it's in a known ignored directory first (cheaper)
+                dir = source.parent
+                in_ignored_dir = dir in ignored_dirs
+                if not in_ignored_dir and dir not in ok_dirs:
+                    if (
+                        subprocess.run(
+                            ['git', 'check-ignore', '--quiet', str(dir)],
+                            capture_output=True,
+                            encoding='utf-8',
+                            cwd=str(dir),
+                            check=False,
+                        ).returncode
+                        == 0
+                    ):
+                        ignored_dirs.add(dir)
+                        in_ignored_dir = True
+                    else:
+                        ok_dirs.add(dir)
+                # now check file
+                if not in_ignored_dir and (
                     subprocess.run(
                         ['git', 'check-ignore', '--quiet', str(source)],
                         capture_output=True,
                         encoding='utf-8',
-                        cwd=str(Path(source).parent),
+                        cwd=str(dir),
                         check=False,
                     ).returncode
                     == 0
                 ):
-                    gitignored_sources.add(source)
-            sources = [s for s in sources if s not in gitignored_sources]
+                    ignored_sources.add(source)
+            sources = [s for s in sources if s not in ignored_sources]
             if not sources:
                 print("no work to do.")
                 return 0
-
         else:
             print(
                 rf"{bright(rf'warning:', 'yellow')} detected a git repository but could not detect {bright('git')}; .gitignore rules will not be respected"
@@ -441,12 +488,27 @@ def main_impl():
     if STOP.is_set():
         return 0
 
+    # prune compile db and write temp copy
+    compile_db = [x for x in compile_db if Path(x["file"]) in sources]
+    compile_db.sort(key=lambda x: x["file"])
+    compile_db_id = misk.sha1(str(args.compile_db_path.resolve()))
+    compile_db_tmp_path = paths.TEMP / 'compile_db' / rf'{compile_db_id}' / 'compile_commands.json'
+    compile_db_tmp_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(compile_db_tmp_path, encoding='utf-8', mode='w') as f:
+        json.dump(compile_db, f, indent="\t")
+
+    def delete_temp_compile_db():
+        nonlocal compile_db_tmp_path
+        try:
+            misk.delete_file(compile_db_tmp_path)
+            misk.delete_directory(compile_db_tmp_path.parent)
+        except:
+            pass
+
     # session
-    session_id = misk.sha1(str(args.compile_db.resolve()))
+    session_id = compile_db_id
     session_file = paths.TEMP / rf'session_{session_id}.json'
     session = None
-    if args.resumable:
-        args.session = True
     if args.session:
         session_file.parent.mkdir(exist_ok=True)
         write_session = False
@@ -464,30 +526,72 @@ def main_impl():
             session = dict()
             write_session = True
 
-        def reset_sources():
+        session_was_reset = False
+        session_reset_reason = ''
+
+        def reset_session(reason: str):
             nonlocal session
-            nonlocal session_id
+            nonlocal session_was_reset
+            nonlocal session_reset_reason
+            nonlocal write_session
+            if session_was_reset:
+                return
             session['sources'] = dict()
             write_session = True
+            session_was_reset = True
+            session_reset_reason = str(reason).strip()
 
-        compile_db_modified = args.compile_db.stat().st_mtime_ns
         if 'id' not in session or session['id'] != session_id:
             session['id'] = session_id
-            reset_sources()
+            reset_session('session ID mismatched')
+
         if 'hash' not in session or session['hash'] != compile_db_hash:
             session['hash'] = compile_db_hash
-            reset_sources()
+            reset_session('compilation database changed')
+
+        compile_db_modified = args.compile_db_path.stat().st_mtime_ns
         if 'modified' not in session or session['modified'] != compile_db_modified:
             session['modified'] = compile_db_modified
-            reset_sources()
-        if 'compile_db' not in session or session['compile_db'] != str(args.compile_db.resolve()):
-            session['compile_db'] = str(args.compile_db.resolve())
-            reset_sources()
+            reset_session('compilation database changed')
+
+        if 'compile_db' not in session or session['compile_db'] != str(args.compile_db_path.resolve()):
+            session['compile_db'] = str(args.compile_db_path.resolve())
+            reset_session('compilation database changed')
+
         if 'clang_tidy_version' not in session or tuple(session['clang_tidy_version']) != clang_tidy_version:
             session['clang_tidy_version'] = clang_tidy_version
-            reset_sources()
+            reset_session('clang-tidy version changed')
+
         if 'sources' not in session:
-            reset_sources()
+            reset_session('no previously discovered sources')
+
+        # .clang-tidy configs
+        config_search_dirs = set()
+        for source in sources:
+            config_search_dirs.add(source.parent)
+        config_modified = set()
+        for dir in config_search_dirs:
+            cfg = find_upwards(".clang-tidy", files=True, directories=False, start_dir=dir)
+            if cfg is not None:
+                config_modified.add(cfg)
+        config_modified = sorted([x.stat().st_mtime_ns for x in config_modified])
+        config_modified = config_modified[-1] if config_modified else 0
+        if 'config_modified' not in session or session['config_modified'] != config_modified:
+            session['config_modified'] = config_modified
+            reset_session('.clang-tidy config changed')
+
+        # other misc build generator files
+        build_scripts_modified = []
+        for filename in ('build.ninja', 'CMakeCache.txt'):
+            file = args.compile_db_path.parent / filename
+            if file.exists():
+                build_scripts_modified.append(file)
+        build_scripts_modified = sorted([x.stat().st_mtime_ns for x in build_scripts_modified])
+        build_scripts_modified = build_scripts_modified[-1] if build_scripts_modified else 0
+        if 'build_scripts_modified' not in session or session['build_scripts_modified'] != build_scripts_modified:
+            session['build_scripts_modified'] = build_scripts_modified
+            reset_session('build scripts changed')
+
         completed_sources = set()
         any_completed = False
         all_completed = True
@@ -519,21 +623,30 @@ def main_impl():
         if write_session:
             with open(session_file, encoding='utf-8', mode='w') as f:
                 json.dump(session, f, indent="\t")
-        print(
-            rf"{'restarting' if all_completed else ('resuming' if any_completed else 'starting')} session {bright(session_id)}"
-        )
+
+        if not args.labels_only:
+            if all_completed or session_was_reset:
+                print(
+                    rf'restarting session {bright(session_id)}{rf" (restarted because {session_reset_reason})" if session_was_reset and session_reset_reason else ""}'
+                )
+            elif any_completed:
+                print(rf'resuming session {bright(session_id)}')
+            else:
+                print(rf'starting session {bright(session_id)}')
 
         sources = [s for s in sources if s not in completed_sources]
         if not sources:
             print("no work to do.")
-            return 0
-        if STOP.is_set():
+            delete_temp_compile_db()
             return 0
     else:
         try:
             session_file.unlink()
         except:
             pass
+    if STOP.is_set():
+        delete_temp_compile_db()
+        return 0
 
     # run clang-tidy on each file
     global FATAL_ERROR
@@ -542,7 +655,8 @@ def main_impl():
     FATAL_ERROR = multiprocessing.Event()
     PROBLEMATIC_FILE_COUNT = multiprocessing.Value('i', 0)
     SESSION_FILE_LOCK = multiprocessing.Lock()
-    print(rf'running {bright(clang_tidy_label)} on {len(sources)} file{"s" if len(sources) > 1 else ""}')
+    if not args.labels_only:
+        print(rf'running {bright(clang_tidy_label)} on {len(sources)} file{"s" if len(sources) > 1 else ""}')
     with futures.ProcessPoolExecutor(
         max_workers=max(min(os.cpu_count(), len(sources), args.threads), 1), initializer=initialize_worker
     ) as executor:
@@ -551,10 +665,11 @@ def main_impl():
                 worker,
                 clang_tidy_exe,
                 clang_tidy_version,
-                args.compile_db,
+                compile_db_tmp_path,
                 args.werror,
                 f,
                 session_file if session is not None else None,
+                args.labels_only,
             )
             for f in sources
         ]
@@ -573,14 +688,21 @@ def main_impl():
                 if not isinstance(exc, KeyboardInterrupt):
                     print(rf'[{type(exc).__name__}] {exc}')
                     FATAL_ERROR.set()
+                    delete_temp_compile_db()
                     raise
 
     if FATAL_ERROR.is_set():
+        delete_temp_compile_db()
         return r'An error occurred.'
+
     with PROBLEMATIC_FILE_COUNT.get_lock():
         if PROBLEMATIC_FILE_COUNT.value:
-            print(rf'{bright(clang_tidy_label)} found problems in {PROBLEMATIC_FILE_COUNT.value} file(s).')
+            if not args.labels_only:
+                print(rf'{bright(clang_tidy_label)} found problems in {PROBLEMATIC_FILE_COUNT.value} file(s).')
+            delete_temp_compile_db()
             return int(PROBLEMATIC_FILE_COUNT.value)
+
+    delete_temp_compile_db()
     return 0
 
 
