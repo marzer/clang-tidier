@@ -512,7 +512,9 @@ def main_impl():
     if args.session:
         session_file.parent.mkdir(exist_ok=True)
         write_session = False
+        session_existed = False
         if session_file.exists():
+            session_existed = True
             try:
                 with open(session_file, encoding='utf-8') as f:
                     session = json.load(f)
@@ -625,11 +627,11 @@ def main_impl():
                 json.dump(session, f, indent="\t")
 
         if not args.labels_only:
-            if all_completed or session_was_reset:
+            if session_existed and (all_completed or session_was_reset):
                 print(
                     rf'restarting session {bright(session_id)}{rf" (restarted because {session_reset_reason})" if session_was_reset and session_reset_reason else ""}'
                 )
-            elif any_completed:
+            elif session_existed and any_completed:
                 print(rf'resuming session {bright(session_id)}')
             else:
                 print(rf'starting session {bright(session_id)}')
