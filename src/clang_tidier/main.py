@@ -315,23 +315,11 @@ def main_impl():
         if not args.compile_db_path.is_file():
             return rf"compilation database {bright(args.compile_db_path)} did not exist or was not a file"
 
-    # compute filters
-    if not args.include:
-        args.include = []
-    if not args.exclude:
-        args.exclude = []
-    args.exclude.append(r'.*/_deps/.*')
-    args.exclude.append(r'^/tmp/.*')
-    args.include = [re.compile(s) for s in args.include]
-    args.exclude = [re.compile(s) for s in args.exclude]
-
     # read compilation db
     compile_db = None
-    compile_db_hash = ''
     with open(str(args.compile_db_path), encoding='utf-8') as f:
         db_text = f.read()
         compile_db = json.loads(db_text)
-        compile_db_hash = misk.sha1(db_text)
     if not isinstance(compile_db, (list, tuple)):
         return rf"expected array at root of {bright('clang-tidy')}; saw {type(compile_db).__name__}"
     if not compile_db:
@@ -343,12 +331,13 @@ def main_impl():
 
     # enumerate translation units
     sources = []
+    invalid_pchs = set()
     for i in range(len(compile_db)):
         source = compile_db[i]
         if not isinstance(source, dict):
             return rf"expected source [{i}] as JSON object; saw {type(source).__name__}"
         source: dict
-        # read file path
+        # sanity-check file path
         file = source.get('file', None)
         if file is None:
             return rf"expected source [{i}] to have key {bright('file')}"
@@ -360,14 +349,62 @@ def main_impl():
             if directory:
                 file = directory / file
         file = file.resolve()
+        # filter out various problematic things
+        excluded = False
+        for exclude_pattern in (r'^/tmp/', r'^/var/tmp/', r'.*[/\\]_deps[/\\].*'):
+            if re.search(exclude_pattern, str(file)):
+                excluded = True
+                break
+        if excluded:
+            continue
         # check if the file exists
         if not (file.exists() and file.is_file()):
+            print(rf"{bright(rf'warning:', 'yellow')} source '{file}' did not exist or was not a file; ignoring")
             continue
+        # sanity-check command
+        command = source.get('command', None)
+        if command is None:
+            return rf"expected source '{file}' to have key {bright('command')}"
+        command = str(command).strip()
+        # massage CMake PCH into behaving
+        include_pch = re.search(
+            r'-Xclang\s+-include-pch\s+-Xclang\s+([^\s]*?cmake_pch.h(?:xx|pp|\+\+|h)?.pch)', command
+        )
+        if include_pch:
+            pch_path = Path(include_pch[1])
+            if pch_path in invalid_pchs or not (pch_path.exists() and pch_path.is_file()):
+                invalid_pchs.add(pch_path)
+                source['command'] = command[: include_pch.start()] + command[include_pch.end() :]
         sources.append(file)
         source['file'] = str(file)
+    compile_db.sort(key=lambda x: x["file"])
     sources = misk.remove_duplicates(sorted([s for s in sources if s is not None]))
+    if not sources:
+        print("no work to do.")
+        return 0
+
+    # at this point sources[] contains the absolute paths of all the non-temp, non-_deps source files that actually
+    # existed, with the file paths of compile_db being synchronized to match.
+    #
+    # we now prune compile_db of any entries that did not survive this first pass,
+    # and generate the compile db hash based on that version of it
+    #
+    # (note: this is done before applying the user's filters; this is intentional)
+    def prune_compile_db_to_match_sources():
+        nonlocal compile_db
+        nonlocal sources
+        compile_db = [x for x in compile_db if Path(x["file"]) in sources]
+
+    prune_compile_db_to_match_sources()
+    compile_db_hash = misk.sha1(json.dumps(compile_db, indent="\t"))
 
     # apply include and exclude filters
+    if not args.include:
+        args.include = []
+    if not args.exclude:
+        args.exclude = []
+    args.include = [re.compile(s) for s in args.include]
+    args.exclude = [re.compile(s) for s in args.exclude]
     for i in range(len(sources)):
         source = sources[i]
         sources[i] = None
@@ -489,8 +526,7 @@ def main_impl():
         return 0
 
     # prune compile db and write temp copy
-    compile_db = [x for x in compile_db if Path(x["file"]) in sources]
-    compile_db.sort(key=lambda x: x["file"])
+    prune_compile_db_to_match_sources()
     compile_db_id = misk.sha1(str(args.compile_db_path.resolve()))
     compile_db_tmp_path = paths.TEMP / 'compile_db' / rf'{compile_db_id}' / 'compile_commands.json'
     compile_db_tmp_path.parent.mkdir(parents=True, exist_ok=True)
@@ -504,6 +540,11 @@ def main_impl():
             misk.delete_directory(compile_db_tmp_path.parent)
         except:
             pass
+
+    if invalid_pchs:
+        print(
+            rf"{bright(rf'warning:', 'yellow')} detected precompiled headers with missing compilands; analysis will work but may be incomplete (run the regular build at least once to avoid this)"
+        )
 
     # session
     session_id = compile_db_id
@@ -547,17 +588,12 @@ def main_impl():
             session['id'] = session_id
             reset_session('session ID mismatched')
 
+        if 'location' not in session or session['location'] != str(args.compile_db_path.resolve()):
+            session['location'] = str(args.compile_db_path.resolve())
+            reset_session('compilation database changed')
+
         if 'hash' not in session or session['hash'] != compile_db_hash:
             session['hash'] = compile_db_hash
-            reset_session('compilation database changed')
-
-        compile_db_modified = args.compile_db_path.stat().st_mtime_ns
-        if 'modified' not in session or session['modified'] != compile_db_modified:
-            session['modified'] = compile_db_modified
-            reset_session('compilation database changed')
-
-        if 'compile_db' not in session or session['compile_db'] != str(args.compile_db_path.resolve()):
-            session['compile_db'] = str(args.compile_db_path.resolve())
             reset_session('compilation database changed')
 
         if 'clang_tidy_version' not in session or tuple(session['clang_tidy_version']) != clang_tidy_version:
