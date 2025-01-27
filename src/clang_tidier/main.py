@@ -232,19 +232,21 @@ def worker(
             raise
 
 
-def make_boolean_optional_arg(args, name, default, help='', **kwargs):
-    if sys.version_info.minor >= 9:
+def make_boolean_optional_arg(args: argparse.ArgumentParser, name: str, default, help='', **kwargs):
+    name = name.strip().lstrip('-')
+    if sys.version_info >= (3, 9):
         args.add_argument(rf'--{name}', default=default, help=help, action=argparse.BooleanOptionalAction, **kwargs)
     else:
-        args.add_argument(rf'--{name}', action=r'store_true', help=help, **kwargs)
+        dest = name.replace(r'-', r'_')
+        args.add_argument(rf'--{name}', action=r'store_true', help=help, dest=dest, default=default, **kwargs)
         args.add_argument(
             rf'--no-{name}',
             action=r'store_false',
             help=(help if help == argparse.SUPPRESS else None),
-            dest=name,
+            dest=dest,
+            default=default,
             **kwargs,
         )
-        args.set_defaults(**{name: default})
 
 
 def main_impl():
@@ -271,6 +273,7 @@ def main_impl():
     args.add_argument(
         r"--threads", type=int, metavar=r"<num>", default=os.cpu_count(), help=rf"number of threads to use."
     )
+    args.add_argument(r"--batch", type=str, metavar=r"num/denom", default="1/1", help=rf"batch subdivisions.")
     make_boolean_optional_arg(
         args, r'session', default=True, help=r'saves run information so subsequent re-runs may avoid re-scanning files.'
     )
@@ -289,6 +292,18 @@ def main_impl():
         print(rf'{bright("clang-tidier", colour="cyan")} v{VERSION_STRING} - github.com/marzer/clang-tidier')
     global STOP
     STOP = multiprocessing.Event()
+
+    # parse batch number
+    args.batch = args.batch.strip() if args.batch is not None else ''
+    args.batch = args.batch if args.batch else '1/1'
+    m = re.fullmatch(r'\s*([+-]?[0-9]+)[/\\: \t.,-]+?([+-]?[0-9]+)\s*', args.batch)
+    if not m:
+        return rf"batch: could not parse batch information from '{bright(args.batch)}'"
+    args.batch = (int(m[1]), int(m[2]))
+    if args.batch[0] <= 0 or args.batch[1] <= 0:
+        return rf"batch: values must be positive integers"
+    if args.batch[0] > args.batch[1]:
+        return rf"batch: index must not be greater than count"
 
     # find compile_commands.json
     if args.compile_db_path is None:
@@ -379,6 +394,13 @@ def main_impl():
         source['file'] = str(file)
     compile_db.sort(key=lambda x: x["file"])
     sources = misk.remove_duplicates(sorted([s for s in sources if s is not None]))
+
+    # apply batching
+    sources_ = []
+    for i in range(args.batch[0] - 1, len(sources), args.batch[1]):
+        sources_.append(sources[i])
+    sources = sources_
+
     if not sources:
         print("no work to do.")
         return 0

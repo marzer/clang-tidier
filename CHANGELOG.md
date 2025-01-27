@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.0 - 2025/01/27
+
+- Added `--batch x/y` to enable distributed parallelism
+- Minor internal fixes
+
 ## v0.4.1 - 2024/11/19
 
 - Fixed precompiled headers breaking runs in some circumstances
