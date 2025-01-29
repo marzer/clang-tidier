@@ -310,15 +310,15 @@ def main_impl():
         # look in cwd
         if (Path.cwd() / 'compile_commands.json').is_file():
             args.compile_db_path = Path.cwd() / 'compile_commands.json'
-        # search upwards
-        if args.compile_db_path is None:
-            args.compile_db_path = find_upwards('compile_commands.json')
         # search one step downwards
         if args.compile_db_path is None:
             for dir in Path.cwd().iterdir():
                 if dir.is_dir() and (dir / 'compile_commands.json').is_file():
                     args.compile_db_path = dir / 'compile_commands.json'
                     break
+        # search upwards
+        if args.compile_db_path is None:
+            args.compile_db_path = find_upwards('compile_commands.json')
         if args.compile_db_path is not None:
             if not args.labels_only:
                 print(rf"found compilation database {bright(get_relative_path(args.compile_db_path))}")
@@ -389,9 +389,21 @@ def main_impl():
             pch_path = Path(include_pch[1])
             if pch_path in invalid_pchs or not (pch_path.exists() and pch_path.is_file()):
                 invalid_pchs.add(pch_path)
-                source['command'] = command[: include_pch.start()] + command[include_pch.end() :]
-        sources.append(file)
+                command = command[: include_pch.start()] + command[include_pch.end() :]
+        # remove warning flags and other args that muck things up (e.g. GCC flags clang doesn't understand)
+        UNWANTED_ARGS = (
+            r'-Wl,[a-zA-Z0-9_+=-]+',
+            r'-fsanitize(=[a-zA-Z0-9_+-]+)?',
+            r'-static-asan',
+            r'-W(no-|error=)?[a-z][a-zA-Z0-9_+-]*',
+        )
+        command += ' '
+        for arg in UNWANTED_ARGS:
+            command = re.sub(rf'\s+{arg}\b', '', command)
+        # commit back to db
+        source['command'] = command.strip()
         source['file'] = str(file)
+        sources.append(file)
     compile_db.sort(key=lambda x: x["file"])
     sources = misk.remove_duplicates(sorted([s for s in sources if s is not None]))
 

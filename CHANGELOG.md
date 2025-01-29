@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.1 - 2025/01/29
+
+- Fixed sanitizer and GCC flags breaking clang-tidy in some common cases
+
 ## v0.5.0 - 2025/01/27
 
 - Added `--batch x/y` to enable distributed parallelism
