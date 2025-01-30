@@ -395,11 +395,12 @@ def main_impl():
             r'-Wl,[a-zA-Z0-9_+=-]+',
             r'-fsanitize(=[a-zA-Z0-9_+-]+)?',
             r'-static-asan',
-            r'-W(no-|error=)?[a-z][a-zA-Z0-9_+-]*',
+            r'-g(gdb[0-9]?|btf|dwarf)',
+            r'-W(no-)?(error=)?[a-z][a-zA-Z0-9_+-]*',
         )
         command += ' '
         for arg in UNWANTED_ARGS:
-            command = re.sub(rf'\s+{arg}\b', '', command)
+            command = re.sub(rf'\s+{arg}\b', ' ', command)
         # commit back to db
         source['command'] = command.strip()
         source['file'] = str(file)

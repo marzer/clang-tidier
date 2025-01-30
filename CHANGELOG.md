@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.2 - 2025/01/30
+
+- Fixed compiler argument slicing regression introduced in v0.5.1
+
 ## v0.5.1 - 2025/01/29
 
 - Fixed sanitizer and GCC flags breaking clang-tidy in some common cases
