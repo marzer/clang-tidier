@@ -88,9 +88,11 @@ def find_upwards(name: str, files=True, directories=False, start_dir: Path = Pat
     return None
 
 
-def get_relative_path(p: Path, relative_to: Path = Path.cwd()) -> Path:
+def normalize_path(p: Path, relative_to: Path = Path.cwd(), relative=False) -> Path:
 
     p = misk.coerce_path(p).resolve()
+    if not relative:
+        return p
     relative_to = misk.coerce_path(relative_to).resolve()
     try:
         return Path(os.path.relpath(str(p), str(relative_to)))
@@ -128,6 +130,7 @@ def worker(
     src_file: Path,
     session_file: Path,
     labels_only: bool,
+    relative_paths: bool,
 ):
     global STOP
     global FATAL_ERROR
@@ -212,7 +215,7 @@ def worker(
                         msg = msg.replace('error:', bright('error:', colour='RED'))
                         msg = msg.replace('warning:', bright('warning:', colour='YELLOW'))
                         msg = msg.replace('note:', bright('note:', colour='CYAN'))
-                        msg = msg.replace(str(src_file), bright(get_relative_path(src_file)))
+                        msg = msg.replace(str(src_file), bright(normalize_path(src_file, relative=relative_paths)))
             if proc.returncode != 0:
                 msg += f"\nclang-tidy subprocess exited with code {proc.returncode}."
             if msg.startswith('\n'):
@@ -222,7 +225,7 @@ def worker(
             if session_file:
                 record_file_completed(session_file, src_file)
             if not labels_only:
-                print(f'No problems found in {bright(get_relative_path(src_file))}.', flush=True)
+                print(f'No problems found in {bright(normalize_path(src_file, relative=relative_paths))}.', flush=True)
 
     except Exception as exc:
         STOP.set()
@@ -269,7 +272,6 @@ def main_impl():
         r"--exclude", type=str, nargs='+', metavar=r"<regex>", help=rf"regular expression to exclude source files."
     )
     args.add_argument(r'--werror', action=r'store_true', help=r'stop on the first file that emits warnings')
-    args.add_argument(r'--where', action=r'store_true', help=argparse.SUPPRESS)
     args.add_argument(
         r"--threads", type=int, metavar=r"<num>", default=os.cpu_count(), help=rf"number of threads to use."
     )
@@ -277,6 +279,10 @@ def main_impl():
     make_boolean_optional_arg(
         args, r'session', default=True, help=r'saves run information so subsequent re-runs may avoid re-scanning files.'
     )
+    make_boolean_optional_arg(
+        args, r'relative-paths', default=False, help=r'show paths as relative to CWD where possible.'
+    )
+    args.add_argument(r'--where', action=r'store_true', help=argparse.SUPPRESS)
     args.add_argument(r'--labels-only', action=r'store_true', help=argparse.SUPPRESS)
     args = args.parse_args()
 
@@ -321,7 +327,9 @@ def main_impl():
             args.compile_db_path = find_upwards('compile_commands.json')
         if args.compile_db_path is not None:
             if not args.labels_only:
-                print(rf"found compilation database {bright(get_relative_path(args.compile_db_path))}")
+                print(
+                    rf"found compilation database {bright(normalize_path(args.compile_db_path, relative=args.relative_paths))}"
+                )
         else:
             return rf"could not find {bright('compile_commands.json')}"
     else:
@@ -743,6 +751,7 @@ def main_impl():
                 f,
                 session_file if session is not None else None,
                 args.labels_only,
+                args.relative_paths,
             )
             for f in sources
         ]

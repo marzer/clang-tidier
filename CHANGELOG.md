@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.6.0 - 2025/02/10
+
+- Added `--relative-paths` to enable relative paths in output
+- Fixed paths in output always being relative by default
+
 ## v0.5.2 - 2025/01/30
 
 - Fixed compiler argument slicing regression introduced in v0.5.1
