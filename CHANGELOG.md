@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.0 - 2025/02/12
+
+- Added `--fix`
+- Fixed clang's `-ftime-trace` causing failures in some cases
+
 ## v0.6.0 - 2025/02/10
 
 - Added `--relative-paths` to enable relative paths in output

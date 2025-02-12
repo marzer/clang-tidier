@@ -131,6 +131,7 @@ def worker(
     session_file: Path,
     labels_only: bool,
     relative_paths: bool,
+    fix: bool,
 ):
     global STOP
     global FATAL_ERROR
@@ -152,6 +153,7 @@ def worker(
                 '--extra-arg=-D__clang_tidy__',
             ]
             + (['--use-color=false'] if clang_tidy_version[0] >= 12 else [])
+            + (['--fix'] if fix else [])
             + [src_file],
             cwd=str(Path.cwd()),
             encoding='utf-8',
@@ -159,13 +161,19 @@ def worker(
             check=False,
         )
 
-        def find_error(s):
-            return re.search(rf'\s?(?:[Ww]arning|[Ee]rror|WARNING|ERROR):\s?', s)
+        def find_error(s) -> bool:
+            return bool(re.search(rf'\s?(?:[Ww]arning|[Ee]rror|WARNING|ERROR):\s?', s))
 
         stdout = clean_clang_tidy_output(proc.stdout)
         stderr = clean_clang_tidy_output(proc.stderr)
-        stdout = ('stdout', stdout, find_error(stdout))
-        stderr = ('stderr', stderr, find_error(stderr))
+        stdout = ['stdout', stdout, find_error(stdout)]
+        stderr = ['stderr', stderr, find_error(stderr)]
+
+        if fix and proc.returncode == 0 and stdout[2] and not stderr[2]:
+            m = re.fullmatch(r'clang-tidy\s+applied\s+([0-9]+)\s+of\s+([0-9]+)\s+(suggested\s+)?fixes[.]?', stderr[1])
+            if m and m[1] == m[2]:
+                stdout[2] = False
+
         found_error = stdout[2] or stderr[2]
         both_have_content = stdout[1] and stderr[1]
         either_have_content = stdout[1] or stderr[1]
@@ -282,6 +290,7 @@ def main_impl():
     make_boolean_optional_arg(
         args, r'relative-paths', default=False, help=r'show paths as relative to CWD where possible.'
     )
+    make_boolean_optional_arg(args, r'fix', default=False, help=r'attempt to apply clang-tidy fixes where possible.')
     args.add_argument(r'--where', action=r'store_true', help=argparse.SUPPRESS)
     args.add_argument(r'--labels-only', action=r'store_true', help=argparse.SUPPRESS)
     args = args.parse_args()
@@ -402,6 +411,7 @@ def main_impl():
         UNWANTED_ARGS = (
             r'-Wl,[a-zA-Z0-9_+=-]+',
             r'-fsanitize(=[a-zA-Z0-9_+-]+)?',
+            r'-ftime-trace',
             r'-static-asan',
             r'-g(gdb[0-9]?|btf|dwarf)',
             r'-W(no-)?(error=)?[a-z][a-zA-Z0-9_+-]*',
@@ -752,6 +762,7 @@ def main_impl():
                 session_file if session is not None else None,
                 args.labels_only,
                 args.relative_paths,
+                args.fix,
             )
             for f in sources
         ]
