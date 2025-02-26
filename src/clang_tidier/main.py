@@ -411,7 +411,7 @@ def main_impl():
         UNWANTED_ARGS = (
             r'-Wl,[a-zA-Z0-9_+=-]+',
             r'-fsanitize(=[a-zA-Z0-9_+-]+)?',
-            r'-ftime-trace',
+            r'-f(no-)?(time-trace|pch-(instantiate-templates|debuginfo|codegen|preprocess|validate-input-files-content))',
             r'-static-asan',
             r'-g(gdb[0-9]?|btf|dwarf)',
             r'-W(no-)?(error=)?[a-z][a-zA-Z0-9_+-]*',
