@@ -411,9 +411,10 @@ def main_impl():
         UNWANTED_ARGS = (
             r'-Wl,[a-zA-Z0-9_+=-]+',
             r'-fsanitize(=[a-zA-Z0-9_+-]+)?',
-            r'-f(no-)?(time-trace|pch-(instantiate-templates|debuginfo|codegen|preprocess|validate-input-files-content))',
-            r'-static-asan',
-            r'-g(gdb[0-9]?|btf|dwarf)',
+            r'-f(no-)?(time-trace|pch-(instantiate-templates|debuginfo|codegen|preprocess|validate-input-files-content))[a-zA-Z0-9_+=-]*',
+            r'-static-asan[a-zA-Z0-9_+=-]*',
+            r'-g(gdb[0-9]?|btf|dwarf)[a-zA-Z0-9_+=-]*',
+            r'-s',
             r'-W(no-)?(error=)?[a-z][a-zA-Z0-9_+-]*',
         )
         command += ' '
@@ -648,6 +649,10 @@ def main_impl():
         if 'hash' not in session or session['hash'] != compile_db_hash:
             session['hash'] = compile_db_hash
             reset_session('compilation database changed')
+
+        if 'version' not in session or tuple(session['version']) != VERSION:
+            session['version'] = VERSION
+            reset_session('clang-tidier version changed')
 
         if 'clang_tidy_version' not in session or tuple(session['clang_tidy_version']) != clang_tidy_version:
             session['clang_tidy_version'] = clang_tidy_version

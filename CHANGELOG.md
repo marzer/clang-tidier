@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.7.2 - 2025/03/11
+
+- Fixed some additional compiler flag-related breakages
+
 ## v0.7.1 - 2025/02/26
 
 - Fixed some additional compiler flag-related breakages
