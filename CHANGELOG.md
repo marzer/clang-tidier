@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.0 - 2025/03/16
+
+- Added `--plugins`
+
 ## v0.7.2 - 2025/03/11
 
 - Fixed some additional compiler flag-related breakages

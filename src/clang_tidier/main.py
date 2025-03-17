@@ -15,7 +15,7 @@ import misk
 import json
 import os
 import concurrent.futures as futures
-from typing import Tuple
+from typing import Tuple, List
 from io import StringIO
 from pathlib import Path
 
@@ -132,6 +132,7 @@ def worker(
     labels_only: bool,
     relative_paths: bool,
     fix: bool,
+    plugins: List[str],
 ):
     global STOP
     global FATAL_ERROR
@@ -154,6 +155,7 @@ def worker(
             ]
             + (['--use-color=false'] if clang_tidy_version[0] >= 12 else [])
             + (['--fix'] if fix else [])
+            + ([rf'--load={p}' for p in plugins])
             + [src_file],
             cwd=str(Path.cwd()),
             encoding='utf-8',
@@ -291,6 +293,9 @@ def main_impl():
         args, r'relative-paths', default=False, help=r'show paths as relative to CWD where possible.'
     )
     make_boolean_optional_arg(args, r'fix', default=False, help=r'attempt to apply clang-tidy fixes where possible.')
+    args.add_argument(r"--plugins", type=str, nargs='+', metavar=r"<plugins...>", help=rf"one or more plugins to load.")
+    args.add_argument(r"--plugin", type=str, nargs='+', help=argparse.SUPPRESS)
+    args.add_argument(r"--load", type=str, nargs='+', help=argparse.SUPPRESS)
     args.add_argument(r'--where', action=r'store_true', help=argparse.SUPPRESS)
     args.add_argument(r'--labels-only', action=r'store_true', help=argparse.SUPPRESS)
     args = args.parse_args()
@@ -426,6 +431,14 @@ def main_impl():
         sources.append(file)
     compile_db.sort(key=lambda x: x["file"])
     sources = misk.remove_duplicates(sorted([s for s in sources if s is not None]))
+
+    # enumerate plugins
+    plugins = (
+        [p for p in (args.plugins if args.plugins else [])]
+        + [p for p in (args.plugin if args.plugin else [])]
+        + [p for p in (args.load if args.load else [])]
+    )
+    plugins = misk.remove_duplicates(sorted(plugins))
 
     # apply batching
     sources_ = []
@@ -661,6 +674,10 @@ def main_impl():
         if 'sources' not in session:
             reset_session('no previously discovered sources')
 
+        if 'plugins' not in session or session['plugins'] != plugins:
+            session['plugins'] = plugins
+            reset_session('plugins changed')
+
         # .clang-tidy configs
         config_search_dirs = set()
         for source in sources:
@@ -768,6 +785,7 @@ def main_impl():
                 args.labels_only,
                 args.relative_paths,
                 args.fix,
+                plugins,
             )
             for f in sources
         ]
