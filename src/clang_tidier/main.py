@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import misk
+import platform
 import json
 import os
 import concurrent.futures as futures
@@ -132,7 +133,7 @@ def worker(
     labels_only: bool,
     relative_paths: bool,
     fix: bool,
-    plugins: List[str],
+    plugins: List[List[str]],
 ):
     global STOP
     global FATAL_ERROR
@@ -155,7 +156,7 @@ def worker(
             ]
             + (['--use-color=false'] if clang_tidy_version[0] >= 12 else [])
             + (['--fix'] if fix else [])
-            + ([rf'--load={p}' for p in plugins])
+            + ([rf'--load={p[0]}' for p in plugins])
             + [src_file],
             cwd=str(Path.cwd()),
             encoding='utf-8',
@@ -293,7 +294,7 @@ def main_impl():
         args, r'relative-paths', default=False, help=r'show paths as relative to CWD where possible.'
     )
     make_boolean_optional_arg(args, r'fix', default=False, help=r'attempt to apply clang-tidy fixes where possible.')
-    args.add_argument(r"--plugins", type=str, nargs='+', metavar=r"<plugins...>", help=rf"one or more plugins to load.")
+    args.add_argument(r"--plugins", type=str, nargs='+', metavar=r"<path...>", help=rf"one or more plugins to load.")
     args.add_argument(r"--plugin", type=str, nargs='+', help=argparse.SUPPRESS)
     args.add_argument(r"--load", type=str, nargs='+', help=argparse.SUPPRESS)
     args.add_argument(r'--where', action=r'store_true', help=argparse.SUPPRESS)
@@ -432,14 +433,6 @@ def main_impl():
     compile_db.sort(key=lambda x: x["file"])
     sources = misk.remove_duplicates(sorted([s for s in sources if s is not None]))
 
-    # enumerate plugins
-    plugins = (
-        [p for p in (args.plugins if args.plugins else [])]
-        + [p for p in (args.plugin if args.plugin else [])]
-        + [p for p in (args.load if args.load else [])]
-    )
-    plugins = misk.remove_duplicates(sorted(plugins))
-
     # apply batching
     sources_ = []
     for i in range(args.batch[0] - 1, len(sources), args.batch[1]):
@@ -543,6 +536,77 @@ def main_impl():
         pass  # a failure here doesn't really matter, it's just for finer-grained version checking
     if STOP.is_set():
         return 0
+
+    # plugins:
+    plugins = []
+    if True:
+
+        # helper for sanity-checking plugins
+        def process_plugins(plugins_in: List[str], from_env=False):
+            plugins = [str(p).strip() for p in plugins_in]
+            plugins = [p for p in plugins if p]
+            plugins = misk.remove_duplicates(sorted(plugins))
+
+            # sanity-check and resolve symlinks
+            for i in range(len(plugins)):
+                elem = plugins[i]
+                path = Path(elem)
+                target_path = path
+                if target_path.is_symlink():
+                    target_path = target_path.readlink()
+                if not target_path.is_file():
+                    err = rf"plugin {bright(elem)} "
+                    if from_env:
+                        err += "(from env) "
+                    if target_path != path:
+                        err += rf"was symbolic link to {bright(target_path)} which "
+                    err += rf"did not exist or was not a file"
+                    if from_env:
+                        print(rf"{bright(rf'warning:', 'yellow')} {err}; it will be ignored")
+                        plugins[i] = None
+                        continue
+                    else:
+                        return err
+                plugins[i] = target_path.resolve()
+            plugins = [p for p in plugins if p]
+            plugins = misk.remove_duplicates(sorted(plugins))
+
+            plugins_in.clear()
+            plugins_in += plugins
+            return True
+
+        # enumerate plugins from command-line
+        plugins = (
+            [p for p in (args.plugins if args.plugins else [])]
+            + [p for p in (args.plugin if args.plugin else [])]
+            + [p for p in (args.load if args.load else [])]
+        )
+        plugins_ok = process_plugins(plugins)
+        if isinstance(plugins_ok, str):
+            return plugins_ok
+
+        # enumerate plugins from env
+        env_plugins = []
+        for key in ('CLANG_TIDY_PLUGINS', 'CLANG_TIDIER_PLUGINS'):
+            e = str(os.getenv(key, ''))
+            e = re.split(r'[;' + (r'' if (platform.system() == r'Windows' or os.name == r'nt') else r':') + r']+', e)
+            e = [p.strip() for p in e]
+            e = [p for p in e if p]
+            env_plugins += e
+        process_plugins(env_plugins, True)
+        env_plugins = [p for p in env_plugins if p not in plugins]
+
+        if plugins or env_plugins:
+            print(rf"plugins:")
+            if plugins:
+                print("  " + "\n  ".join([rf"{p}" for p in plugins]))
+            if env_plugins:
+                print("  " + "\n  ".join([rf"{p} (from env)" for p in env_plugins]))
+
+        # merge both, listify and get the last changed date/time for session purposes
+        plugins = plugins + env_plugins
+        plugins = misk.remove_duplicates(sorted(plugins))
+        plugins = [[str(p), p.stat().st_mtime_ns] for p in plugins]
 
     # detect git + filter out gitignored files
     if find_upwards(".git", files=False, directories=True, start_dir=args.compile_db_path.parent) is not None:
@@ -816,7 +880,7 @@ def main_impl():
             if not args.labels_only:
                 print(rf'{bright(clang_tidy_label)} found problems in {PROBLEMATIC_FILE_COUNT.value} file(s).')
             delete_temp_compile_db()
-            return int(PROBLEMATIC_FILE_COUNT.value)
+            return 1
 
     delete_temp_compile_db()
     return 0

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.0 - 2025/03/19
+
+- Added support for reading plugins from environment
+- Added diagnostics if a specified plugin does not exist
+- Fixed plugin changes not trigging session restarts in some circumstances
+
 ## v0.8.0 - 2025/03/16
 
 - Added `--plugins`
