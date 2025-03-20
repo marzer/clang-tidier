@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: MIT
 
 # windows:
-# python -m build && twine upload dist/* && rmdir /S /Q dist
+# rmdir /S /Q dist & python -m build && twine upload dist/* & rmdir /S /Q dist
 
 [build-system]
 requires = ['setuptools', 'wheel']
@@ -15,11 +15,10 @@ name = 'clang-tidier'
 requires-python = '>=3.8'
 description = 'A simple runner for clang-tidy.'
 authors = [{ name = "Mark Gillard", email = "mark.gillard@outlook.com.au" }]
-license = { text = 'MIT' }
+license = 'MIT'
 keywords = ['c++', 'clang-tidy']
 classifiers = [
     'Development Status :: 3 - Alpha',
-    'License :: OSI Approved :: MIT License',
     'Programming Language :: C',
     'Programming Language :: C++',
     'Topic :: Software Development',

@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.9.1 - 2025/03/20
+
+- Fixed issues with plugin symlink resolution
+
 ## v0.9.0 - 2025/03/19
 
 - Added support for reading plugins from environment

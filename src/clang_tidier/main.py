@@ -550,10 +550,8 @@ def main_impl():
             # sanity-check and resolve symlinks
             for i in range(len(plugins)):
                 elem = plugins[i]
-                path = Path(elem)
-                target_path = path
-                if target_path.is_symlink():
-                    target_path = target_path.readlink()
+                path = Path(os.path.abspath(elem))  # normalize without resolving
+                target_path = path.resolve()
                 if not target_path.is_file():
                     err = rf"plugin {bright(elem)} "
                     if from_env:
@@ -567,7 +565,8 @@ def main_impl():
                         continue
                     else:
                         return err
-                plugins[i] = target_path.resolve()
+                plugins[i] = target_path
+
             plugins = [p for p in plugins if p]
             plugins = misk.remove_duplicates(sorted(plugins))
 
