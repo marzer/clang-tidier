@@ -293,6 +293,7 @@ def main_impl():
     make_boolean_optional_arg(
         args, r'relative-paths', default=False, help=r'show paths as relative to CWD where possible.'
     )
+    make_boolean_optional_arg(args, r'external', default=False, help=r'include sources from external/system locations.')
     make_boolean_optional_arg(args, r'fix', default=False, help=r'attempt to apply clang-tidy fixes where possible.')
     args.add_argument(r"--plugins", type=str, nargs='+', metavar=r"<path...>", help=rf"one or more plugins to load.")
     args.add_argument(r"--plugin", type=str, nargs='+', help=argparse.SUPPRESS)
@@ -389,10 +390,11 @@ def main_impl():
         file = file.resolve()
         # filter out various problematic things
         excluded = False
-        for exclude_pattern in (r'^/tmp/', r'^/var/tmp/', r'.*[/\\]_deps[/\\].*'):
-            if re.search(exclude_pattern, str(file)):
-                excluded = True
-                break
+        if not args.external:
+            for exclude_pattern in (r'^/tmp/', r'^/var/tmp/', r'.*[/\\]_deps[/\\].*'):
+                if re.search(exclude_pattern, str(file)):
+                    excluded = True
+                    break
         if excluded:
             continue
         # check if the file exists

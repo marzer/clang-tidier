@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.10.0 - 2025/04/04
+
+- Added `--external`, `--no-external`
+
 ## v0.9.1 - 2025/03/20
 
 - Fixed issues with plugin symlink resolution
