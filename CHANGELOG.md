@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.10.1 - 2025/04/12
+
+- Fixed all errors being disabled being treated as an error
+
 ## v0.10.0 - 2025/04/04
 
 - Added `--external`, `--no-external`

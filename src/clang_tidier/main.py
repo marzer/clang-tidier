@@ -152,6 +152,7 @@ def worker(
                 rf'-p={compile_db.parent}',
                 '--quiet',
                 '--warnings-as-errors=-*',  # none
+                '--allow-no-checks',
                 '--extra-arg=-D__clang_tidy__',
             ]
             + (['--use-color=false'] if clang_tidy_version[0] >= 12 else [])
