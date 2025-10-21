@@ -299,6 +299,9 @@ def main_impl():
         args, r'relative-paths', default=False, help=r'show paths as relative to CWD where possible.'
     )
     make_boolean_optional_arg(args, r'external', default=False, help=r'include sources from external/system locations.')
+    make_boolean_optional_arg(
+        args, r'pch', default=False, help=r'include build-system-generated precompiled header sources.'
+    )
     make_boolean_optional_arg(args, r'fix', default=False, help=r'attempt to apply clang-tidy fixes where possible.')
     args.add_argument(r"--plugins", type=str, nargs='+', metavar=r"<path...>", help=rf"one or more plugins to load.")
     args.add_argument(r"--plugin", type=str, nargs='+', help=argparse.SUPPRESS)
@@ -393,10 +396,15 @@ def main_impl():
             if directory:
                 file = directory / file
         file = file.resolve()
-        # filter out various problematic things
+        # filter out various problematic/undesired things
         excluded = False
-        if not args.external:
+        if not excluded and not args.external:
             for exclude_pattern in (r'^/tmp/', r'^/var/tmp/', r'.*[/\\]_deps[/\\].*'):
+                if re.search(exclude_pattern, str(file)):
+                    excluded = True
+                    break
+        if not excluded and not args.pch:
+            for exclude_pattern in (r'[/\\]cmake[_-]pch[.]h(?:xx|pp|\+\+|h)?[.]c(?:xx|pp|\+\+|c)?$',):
                 if re.search(exclude_pattern, str(file)):
                     excluded = True
                     break
@@ -413,11 +421,11 @@ def main_impl():
         command = str(command).strip()
         # massage CMake PCH into behaving
         include_pch = re.search(
-            r'-Xclang\s+-include-pch\s+-Xclang\s+([^\s]*?cmake_pch.h(?:xx|pp|\+\+|h)?.pch)', command
+            r'-Xclang\s+-include-pch\s+-Xclang\s+([^\s]*?cmake[_-]pch[.]h(?:xx|pp|\+\+|h)?[.]pch)', command
         )
         if include_pch:
             pch_path = Path(include_pch[1])
-            if pch_path in invalid_pchs or not (pch_path.exists() and pch_path.is_file()):
+            if pch_path in invalid_pchs or not (pch_path.exists() and pch_path.is_file()) or not args.pch:
                 invalid_pchs.add(pch_path)
                 command = command[: include_pch.start()] + command[include_pch.end() :]
         # remove warning flags and other args that muck things up (e.g. GCC flags clang doesn't understand)
@@ -678,7 +686,7 @@ def main_impl():
         except:
             pass
 
-    if invalid_pchs:
+    if invalid_pchs and args.pch:
         print(
             rf"{bright(rf'warning:', 'yellow')} detected precompiled headers with missing compilands; analysis will work but may be incomplete (run the regular build at least once to avoid this)"
         )

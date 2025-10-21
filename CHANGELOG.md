@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.11.0 - 2025/10/21
+
+- Added `--pch`, `--no-pch`
+
 ## v0.10.2 - 2025/10/21
 
 - Fixed `--allow-no-checks` being passed to `clang-tidy` &lt; 19.0
