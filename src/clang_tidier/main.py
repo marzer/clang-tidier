@@ -152,10 +152,10 @@ def worker(
                 rf'-p={compile_db.parent}',
                 '--quiet',
                 '--warnings-as-errors=-*',  # none
-                '--allow-no-checks',
                 '--extra-arg=-D__clang_tidy__',
             ]
             + (['--use-color=false'] if clang_tidy_version[0] >= 12 else [])
+            + (['--allow-no-checks'] if clang_tidy_version[0] >= 19 else [])
             + (['--fix'] if fix else [])
             + ([rf'--load={p[0]}' for p in plugins])
             + [src_file],
@@ -192,7 +192,11 @@ def worker(
             if werror:
                 STOP.set()
             msg = ''
+            leading_newline = False
             if either_have_content:
+                if not labels_only:
+                    leading_newline = True
+                    msg += f'Problems found in {bright(normalize_path(src_file, relative=relative_paths))}:'
                 for name, content, _ in (stdout, stderr):
                     if not content:
                         continue
@@ -230,9 +234,9 @@ def worker(
                         msg = msg.replace(str(src_file), bright(normalize_path(src_file, relative=relative_paths)))
             if proc.returncode != 0:
                 msg += f"\nclang-tidy subprocess exited with code {proc.returncode}."
-            if msg.startswith('\n'):
-                msg = msg[1:]
-            print(msg, flush=True)
+            msg = msg.strip()
+            if msg:
+                print(f'{"\n" if leading_newline else ""}{msg}', flush=True)
         else:
             if session_file:
                 record_file_completed(session_file, src_file)
@@ -345,7 +349,7 @@ def main_impl():
         if args.compile_db_path is not None:
             if not args.labels_only:
                 print(
-                    rf"found compilation database {bright(normalize_path(args.compile_db_path, relative=args.relative_paths))}"
+                    rf"Found compilation database {bright(normalize_path(args.compile_db_path, relative=args.relative_paths))}"
                 )
         else:
             return rf"could not find {bright('compile_commands.json')}"
@@ -503,7 +507,7 @@ def main_impl():
     clang_tidy_version = (0, 0, 0)
     if not shutil.which('clang-tidy'):
         clang_tidy_exe = None
-        for i in range(20, 6, -1):
+        for i in range(50, 6, -1):
             if shutil.which(rf'clang-tidy-{i}'):
                 clang_tidy_exe = rf'clang-tidy-{i}'
                 clang_tidy_label = clang_tidy_exe
@@ -532,7 +536,7 @@ def main_impl():
             )
             if not args.labels_only:
                 print(
-                    rf"detected {bright(rf'clang-tidy v{clang_tidy_version[0]}.{clang_tidy_version[1]}.{clang_tidy_version[2]}')}"
+                    rf"Detected {bright(rf'clang-tidy v{clang_tidy_version[0]}.{clang_tidy_version[1]}.{clang_tidy_version[2]}')}"
                 )
             clang_tidy_label = rf'clang-tidy-{clang_tidy_version[0]}'
     except:
@@ -598,8 +602,8 @@ def main_impl():
         process_plugins(env_plugins, True)
         env_plugins = [p for p in env_plugins if p not in plugins]
 
-        if plugins or env_plugins:
-            print(rf"plugins:")
+        if (plugins or env_plugins) and not args.labels_only:
+            print(rf"Plugins:")
             if plugins:
                 print("  " + "\n  ".join([rf"{p}" for p in plugins]))
             if env_plugins:
@@ -806,16 +810,16 @@ def main_impl():
         if not args.labels_only:
             if session_existed and (all_completed or session_was_reset):
                 print(
-                    rf'restarting session {bright(session_id)}{rf" (restarted because {session_reset_reason})" if session_was_reset and session_reset_reason else ""}'
+                    rf'Restarting session {bright(session_id)}{rf" (restarted because {session_reset_reason})" if session_was_reset and session_reset_reason else ""}'
                 )
             elif session_existed and any_completed:
-                print(rf'resuming session {bright(session_id)}')
+                print(rf'Resuming session {bright(session_id)}')
             else:
-                print(rf'starting session {bright(session_id)}')
+                print(rf'Starting session {bright(session_id)}')
 
         sources = [s for s in sources if s not in completed_sources]
         if not sources:
-            print("no work to do.")
+            print("No work to do.")
             delete_temp_compile_db()
             return 0
     else:
@@ -835,7 +839,7 @@ def main_impl():
     PROBLEMATIC_FILE_COUNT = multiprocessing.Value('i', 0)
     SESSION_FILE_LOCK = multiprocessing.Lock()
     if not args.labels_only:
-        print(rf'running {bright(clang_tidy_label)} on {len(sources)} file{"s" if len(sources) > 1 else ""}')
+        print(rf'Running {bright(clang_tidy_label)} on {len(sources)} file{"s" if len(sources) > 1 else ""}')
     with futures.ProcessPoolExecutor(
         max_workers=max(min(os.cpu_count(), len(sources), args.threads), 1), initializer=initialize_worker
     ) as executor:
@@ -880,7 +884,8 @@ def main_impl():
     with PROBLEMATIC_FILE_COUNT.get_lock():
         if PROBLEMATIC_FILE_COUNT.value:
             if not args.labels_only:
-                print(rf'{bright(clang_tidy_label)} found problems in {PROBLEMATIC_FILE_COUNT.value} file(s).')
+                count = int(PROBLEMATIC_FILE_COUNT.value)
+                print(rf'{bright(clang_tidy_label)} found problems in {count} file{"" if count == 1 else "s"}.')
             delete_temp_compile_db()
             return 1
 

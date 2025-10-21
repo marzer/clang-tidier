@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.10.2 - 2025/10/21
+
+- Fixed `--allow-no-checks` being passed to `clang-tidy` &lt; 19.0
+- Fixed plugin information being emitted in `--labels` mode
+- Fixed minor output formatting issues
+
 ## v0.10.1 - 2025/04/12
 
 - Fixed all errors being disabled being treated as an error
