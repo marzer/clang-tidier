@@ -1,0 +1,23 @@
+name: pre-commit
+
+on:
+    push:
+        branches:
+            - "**"
+        tags-ignore:
+            - "**"
+    workflow_dispatch:
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    pre-commit:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v5
+            - uses: actions/setup-python@v6
+              with:
+                  python-version: "3.8"
+            - uses: pre-commit/action@v3.0.1

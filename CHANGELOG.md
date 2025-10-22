@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.11.1 - 2025/10/22
+
+- Fixed f-string `SyntaxError` exception on some python versions
+
 ## v0.11.0 - 2025/10/21
 
 - Added `--pch`, `--no-pch`

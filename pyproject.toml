@@ -15,7 +15,7 @@ name = 'clang-tidier'
 requires-python = '>=3.8'
 description = 'A simple runner for clang-tidy.'
 authors = [{ name = "Mark Gillard", email = "mark.gillard@outlook.com.au" }]
-license = 'MIT'
+license = { text = 'MIT' }
 keywords = ['c++', 'clang-tidy']
 classifiers = [
     'Development Status :: 3 - Alpha',

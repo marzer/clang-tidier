@@ -26,6 +26,7 @@ from . import paths
 from .colour import *
 from .version import *
 
+NEWLINE = "\n"
 IS_WORKER = False
 STOP = None
 FATAL_ERROR = None
@@ -236,7 +237,7 @@ def worker(
                 msg += f"\nclang-tidy subprocess exited with code {proc.returncode}."
             msg = msg.strip()
             if msg:
-                print(f'{"\n" if leading_newline else ""}{msg}', flush=True)
+                print(f'{NEWLINE if leading_newline else ""}{msg}', flush=True)
         else:
             if session_file:
                 record_file_completed(session_file, src_file)
@@ -253,7 +254,7 @@ def worker(
 
 def make_boolean_optional_arg(args: argparse.ArgumentParser, name: str, default, help='', **kwargs):
     name = name.strip().lstrip('-')
-    if sys.version_info >= (3, 9):
+    if sys.version_info >= (3, 9):  # novermin
         args.add_argument(rf'--{name}', default=default, help=help, action=argparse.BooleanOptionalAction, **kwargs)
     else:
         dest = name.replace(r'-', r'_')
