@@ -229,9 +229,9 @@ def worker(
                             msg,
                             flags=re.MULTILINE,
                         )
-                        msg = msg.replace('error:', bright('error:', colour='RED'))
-                        msg = msg.replace('warning:', bright('warning:', colour='YELLOW'))
-                        msg = msg.replace('note:', bright('note:', colour='CYAN'))
+                        msg = msg.replace(': error:', r': ' + bright('error:', colour='RED'))
+                        msg = msg.replace(': warning:', r': ' + bright('warning:', colour='YELLOW'))
+                        msg = msg.replace(': note:', r': ' + bright('note:', colour='CYAN'))
                         msg = msg.replace(str(src_file), bright(normalize_path(src_file, relative=relative_paths)))
             if proc.returncode != 0:
                 msg += f"\nclang-tidy subprocess exited with code {proc.returncode}."
@@ -400,7 +400,12 @@ def main_impl():
         # filter out various problematic/undesired things
         excluded = False
         if not excluded and not args.external:
-            for exclude_pattern in (r'^/tmp/', r'^/var/tmp/', r'.*[/\\]_deps[/\\].*'):
+            for exclude_pattern in (
+                r'^/tmp/',
+                r'^/var/tmp/',
+                r'.*[/\\]_deps[/\\].*',
+                r'/fsw-cmake/embedded_files/[a-zA-Z0-9_]+[.][ch](pp|xx|c|h)?$',
+            ):
                 if re.search(exclude_pattern, str(file)):
                     excluded = True
                     break
@@ -742,8 +747,8 @@ def main_impl():
             session['hash'] = compile_db_hash
             reset_session('compilation database changed')
 
-        if 'version' not in session or tuple(session['version']) != VERSION:
-            session['version'] = VERSION
+        if 'clang_tidier_version' not in session or tuple(session['clang_tidier_version']) != VERSION:
+            session['clang_tidier_version'] = VERSION
             reset_session('clang-tidier version changed')
 
         if 'clang_tidy_version' not in session or tuple(session['clang_tidy_version']) != clang_tidy_version:
@@ -770,7 +775,7 @@ def main_impl():
         config_modified = config_modified[-1] if config_modified else 0
         if 'config_modified' not in session or session['config_modified'] != config_modified:
             session['config_modified'] = config_modified
-            reset_session('.clang-tidy config changed')
+            reset_session('.clang-tidy config modified')
 
         # other misc build generator files
         build_scripts_modified = []
@@ -782,7 +787,14 @@ def main_impl():
         build_scripts_modified = build_scripts_modified[-1] if build_scripts_modified else 0
         if 'build_scripts_modified' not in session or session['build_scripts_modified'] != build_scripts_modified:
             session['build_scripts_modified'] = build_scripts_modified
-            reset_session('build scripts changed')
+            reset_session('build scripts modified')
+
+        # this script
+        clang_tidier_modified = Path(__file__)
+        clang_tidier_modified = clang_tidier_modified.stat().st_mtime_ns if clang_tidier_modified.exists() else 0
+        if 'clang_tidier_modified' not in session or session['clang_tidier_modified'] != clang_tidier_modified:
+            session['clang_tidier_modified'] = clang_tidier_modified
+            reset_session('clang-tidier script modified')
 
         completed_sources = set()
         any_completed = False

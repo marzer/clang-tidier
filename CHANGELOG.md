@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.11.2 - 2026/02/26
+
+- Fixed various minor issues introduced by clang-tidy 22
+
 ## v0.11.1 - 2025/10/22
 
 - Fixed f-string `SyntaxError` exception on some python versions

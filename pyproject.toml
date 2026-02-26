@@ -5,6 +5,10 @@
 
 # windows:
 # rmdir /S /Q dist & python -m build && twine upload dist/* & rmdir /S /Q dist
+#
+# linux
+# sudo rm -rf dist && python3 -m build && twine upload dist/* && rm -rf dist
+
 
 [build-system]
 requires = ['setuptools', 'wheel']
